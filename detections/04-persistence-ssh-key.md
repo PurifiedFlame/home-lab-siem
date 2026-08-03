@@ -2,13 +2,13 @@
 
 **MITRE ATT&CK:** [T1098.004 - Account Manipulation: SSH Authorized Keys](https://attack.mitre.org/techniques/T1098/004/) (Tactic: Persistence)
 
-## Summary
+## What it catches
 
-Flags any public-key SSH login by an account outside the known set of legitimate administrators — the signature of an attacker who planted their own SSH key on a compromised account to maintain passwordless access, without needing to repeat the initial compromise.
+Any public-key SSH login from an account outside my known set of admins. That's what it looks like when an attacker plants their own SSH key on a compromised account so they can keep passwordless access without repeating the original compromise.
 
-## Simulated Attack
+## The attack
 
-Continuing from the privilege escalation scenario, the compromised `webapp` account plants a backdoor key for itself:
+Continuing from the privilege escalation stage, I had the compromised `webapp` account plant a backdoor key for itself:
 
 ```
 # As webapp (already compromised in the prior stage):
@@ -18,21 +18,21 @@ chmod 700 ~/.ssh
 chmod 600 ~/.ssh/authorized_keys
 ```
 
-The private key is exfiltrated to the attacker machine (Kali) and used to log back in without a password — proving the persistence mechanism works:
+Then I pulled the private key over to the attacker machine (Kali) and used it to log back in without a password — proving the persistence mechanism actually worked, not just that the key existed:
 
 ```
 ssh -i backdoor_key webapp@192.168.56.104
 ```
 
-## Log Evidence
+## Log evidence
 
 ```
 sshd-session[2261]: Accepted publickey for webapp from 192.168.56.106 port 60390 ssh2: RSA SHA256:f9lLIyy4KPBdRC8Uw7nOJdP5cin0tpP4desAoQX10Cs
 ```
 
-Note the process name is `sshd-session`, not `sshd` — newer OpenSSH versions split per-connection handling into a separate process from the main listener.
+Worth noting: the process name here is `sshd-session`, not `sshd` — newer OpenSSH versions split per-connection handling into its own process from the main listener. I had to account for that in the GROK pattern.
 
-## Detection Query (ES|QL)
+## Detection query (ES|QL)
 
 ```
 FROM logs-auth.log-default
@@ -45,9 +45,9 @@ FROM logs-auth.log-default
 
 ## Result
 
-Rule correctly matched the backdoor login (`username: webapp`), confirmed via the query test panel.
+The rule correctly matched the backdoor login (`username: webapp`), confirmed in the query test panel.
 
-## Notes
+## Things I noticed / would do differently
 
-- This detects *use* of a planted key (the login event), not the *planting* of the key itself (the file write to `authorized_keys`). A more thorough detection would also monitor file integrity on `~/.ssh/authorized_keys` paths directly (e.g. via `auditd` watch rules), catching the persistence mechanism at creation time rather than only when it's exercised. That was out of scope for this lab to keep the log pipeline consistent with the other three detections, but is a natural next step.
-- Chains directly off the privilege escalation detection — together they tell a complete story: an attacker compromises a low-privilege account, escalates via a sudo misconfiguration, and plants persistence to avoid needing to repeat the compromise.
+- This only catches the *use* of a planted key (the login event), not the planting itself (the file write to `authorized_keys`). A more thorough setup would also watch `~/.ssh/authorized_keys` directly for changes — e.g. with `auditd` file integrity rules — to catch the persistence mechanism the moment it's created, not just when it gets used later. I kept this one scoped to the log pipeline I already had running rather than adding a new detection surface, but it's the natural next step.
+- This one chains right off the privilege escalation detection — together they tell one continuous story: an attacker compromises a low-privilege account, escalates through a sudo misconfiguration, then plants persistence so they don't have to repeat the compromise.

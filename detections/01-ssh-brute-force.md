@@ -2,27 +2,27 @@
 
 **MITRE ATT&CK:** [T1110 - Brute Force](https://attack.mitre.org/techniques/T1110/) (Tactic: Credential Access)
 
-## Summary
+## What it catches
 
-Flags any source IP with more than 5 failed SSH login attempts within a rolling window — the signature of an automated password-guessing attack against SSH.
+Any source IP that racks up more than 5 failed SSH login attempts in a short window. That pattern doesn't really happen from normal human error — it's what an automated password-guessing tool looks like.
 
-## Simulated Attack
+## The attack
 
-From the Kali VM, ran Hydra against the Ubuntu victim's SSH service using a wordlist:
+From the Kali VM, I ran Hydra against the Ubuntu victim's SSH service with a wordlist:
 
 ```
 hydra -l ubuntu -P /usr/share/wordlists/rockyou.txt -t 4 ssh://192.168.56.104
 ```
 
-## Log Evidence
+## Log evidence
 
-Each failed attempt generates a line in `/var/log/auth.log`, shipped by Elastic Agent into the `logs-auth.log-default` data stream:
+Every failed attempt shows up in `/var/log/auth.log`, which Elastic Agent ships into the `logs-auth.log-default` data stream:
 
 ```
 Failed password for invalid user admin from 203.0.113.5 port 51000 ssh2
 ```
 
-## Detection Query (ES|QL)
+## Detection query (ES|QL)
 
 ```
 FROM logs-auth.log-default
@@ -36,9 +36,9 @@ FROM logs-auth.log-default
 
 ## Result
 
-Rule fired against the live Hydra attack, generating a real Kibana alert tagged `credential-access`, `mitre-t1110`. Confirmed via Kibana's Rules > Alert History: rule executed on schedule, correctly transitioned from Active to Recovered once the attack burst ended.
+The rule fired against the live Hydra attack and generated a real Kibana alert tagged `credential-access`, `mitre-t1110`. I checked Rules > Alert History and confirmed it ran on schedule and correctly flipped from Active to Recovered once the attack burst ended.
 
-## Notes
+## Things I noticed / would do differently
 
-- The rule alerts as a single event per check cycle rather than one alert per attacking IP, since per-IP grouping happens inside the ES|QL query (`STATS ... BY source_ip`) rather than through Kibana's native alert-grouping feature. A production version would use Kibana's built-in grouping to generate a distinct alert instance per source IP.
-- Threshold (`> 5` in 5 minutes) is intentionally lenient for a lab environment; a real deployment would tune this against baseline traffic to avoid false positives from legitimate retry behavior (e.g. a user mistyping a password twice).
+- The rule alerts once per check cycle rather than once per attacking IP — the per-IP grouping happens inside the ES|QL query itself (`STATS ... BY source_ip`) instead of through Kibana's native alert-grouping. For a real deployment I'd use Kibana's built-in grouping so each source IP gets its own alert instance.
+- The threshold (5 in 5 minutes) is deliberately loose for a lab. In production I'd tune it against actual baseline traffic — a user fat-fingering their password twice shouldn't trip the same alert as a brute-force tool.

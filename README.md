@@ -1,6 +1,8 @@
 # Home Lab SIEM
 
-A self-built detection lab: two VMs (an Ubuntu Server victim and a Kali Linux attacker) on an isolated network, an Elastic Stack SIEM ingesting host logs, and four custom detection rules — each mapped to a MITRE ATT&CK technique and validated against a real simulated attack.
+I built this to get hands-on with the detection side of security engineering — not just reading about SIEMs but actually standing one up, generating real attack traffic, and writing detection rules that catch it.
+
+The setup: two VMs on an isolated network (an Ubuntu Server victim and a Kali Linux attacker), an Elastic Stack SIEM pulling in host logs, and four detection rules, each one mapped to a MITRE ATT&CK technique and tested against an attack I actually ran myself.
 
 ## Architecture
 
@@ -27,20 +29,20 @@ A self-built detection lab: two VMs (an Ubuntu Server victim and a Kali Linux at
                                    └──────────────────────────────┘
 ```
 
-Both VMs run in VirtualBox on a host-only network (`192.168.56.0/24`), which also gives them a route to the host machine itself — that's how the Elastic Agent on the Ubuntu VM reaches Elasticsearch running in Docker on the host.
+Both VMs sit on a VirtualBox host-only network (`192.168.56.0/24`). That network also routes to the host machine itself, which is how the Elastic Agent on the Ubuntu VM reaches Elasticsearch running in Docker on my host.
 
-## Attack Chain Simulated
+## The attack chain
 
-This lab walks through a realistic attack progression, not just isolated demos:
+Instead of running a couple of disconnected demos, I wanted the lab to tell one story — an attacker working through an actual intrusion, stage by stage:
 
-1. **Reconnaissance** — port scan against the victim (MITRE T1046)
-2. **Initial Access** — SSH brute force against a discovered open port (MITRE T1110)
-3. **Privilege Escalation** — abuse of a misconfigured sudo-enabled low-privilege account (MITRE T1548.003)
-4. **Persistence** — planting an SSH key for passwordless re-entry (MITRE T1098.004)
+1. **Recon** — port scan the victim to find what's open (MITRE T1046)
+2. **Initial access** — brute-force SSH on the port I found (MITRE T1110)
+3. **Privilege escalation** — abuse a misconfigured sudo account (MITRE T1548.003)
+4. **Persistence** — plant an SSH key so I can get back in without a password (MITRE T1098.004)
 
-Each stage has its own detection rule, written in Elastic's ES|QL query language, running on a schedule against live log data — not a one-off search.
+Each stage has its own detection rule written in ES|QL, running on a schedule against live log data — not a one-off search I ran manually.
 
-## Detection Rules
+## Detection rules
 
 | # | Detection | MITRE Technique | Data Source | Writeup |
 |---|-----------|-----------------|--------------|---------|
@@ -51,21 +53,24 @@ Each stage has its own detection rule, written in Elastic's ES|QL query language
 
 ## Dashboard
 
-A Kibana dashboard tracking log activity across both data sources over time:
+A Kibana dashboard I built to track log activity across both data sources over time:
 
 ![SIEM Dashboard](dashboard/siem-dashboard.png)
 
 ## Stack
 
-- **Elasticsearch + Kibana** (via [Elastic's `start-local` script](https://github.com/elastic/start-local), running in Docker)
-- **Elastic Agent** — standalone mode (no Fleet Server), configured directly via `elastic-agent.yml`
+- **Elasticsearch + Kibana** — via [Elastic's `start-local` script](https://github.com/elastic/start-local), running in Docker
+- **Elastic Agent** — standalone mode (no Fleet Server), configured directly through `elastic-agent.yml`
 - **VirtualBox** — Ubuntu Server 26.04 LTS (victim) + Kali Linux (attacker), host-only networking
-- **ufw** — Ubuntu's firewall, configured with logging enabled to capture blocked connection attempts
+- **ufw** — Ubuntu's firewall, with logging turned on to catch blocked connection attempts
 - **Detection rules** — Kibana's Elasticsearch Query Rule type, using ES|QL for parsing (`GROK`) and aggregation (`STATS`)
 
-## Notes on Design Decisions
+## Design decisions (and things I'd change for production)
 
-- **Standalone Elastic Agent instead of Fleet-managed** — kept the lab simpler by configuring the agent directly via YAML rather than standing up a separate Fleet Server. In a production environment, Fleet-managed agents would be preferred for centralized policy management at scale.
-- **ES|QL for detection logic** — rather than using Kibana's built-in threshold rule type, each rule uses a full ES|QL query so that source IPs and other fields could be parsed out of raw log lines with `GROK` before aggregating — necessary since the underlying logs (`auth.log`, `ufw.log`) aren't pre-parsed into structured fields.
-- **Rate-limited firewall logging** — `ufw`'s default logging doesn't log every single blocked packet, only a rate-limited sample. The port scan detection threshold was tuned to reflect that real-world behavior rather than an idealized "log everything" assumption.
-- **5-minute detection windows** — initial rules used a 1-minute window matching the underlying attack pattern (e.g. "more than 5 failed logins in 60 seconds"), but this proved too tight for manual testing/validation given normal latency in log shipping and indexing. Widened to 5 minutes for reliability; a production deployment against continuous traffic could safely use a tighter window.
+**Standalone Elastic Agent instead of Fleet-managed.** I configured the agent directly through YAML instead of standing up a separate Fleet Server, mostly to keep the lab from ballooning in scope. At real scale, Fleet-managed agents would make a lot more sense for centralized policy management.
+
+**ES|QL instead of Kibana's built-in threshold rules.** The raw logs (`auth.log`, `ufw.log`) aren't structured — I needed `GROK` to pull fields like source IP out of plain text lines before I could aggregate on them, so a full ES|QL query was the right tool rather than a simple threshold rule.
+
+**Rate-limited firewall logging.** I learned this one the hard way — `ufw` doesn't log every blocked packet by default, just a rate-limited sample. My first port scan threshold assumed full logging and never fired. I tuned it down once I checked how many entries were actually landing in the logs.
+
+**5-minute detection windows.** I started with a 1-minute window to match the attack pattern (5+ failed logins in 60 seconds), but that was too tight once I accounted for the lag between running an attack and switching over to check Kibana. Widened it to 5 minutes for reliable testing — a production deployment watching continuous traffic could safely go tighter.
